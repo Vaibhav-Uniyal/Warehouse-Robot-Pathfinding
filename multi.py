@@ -1,139 +1,218 @@
-import gymnasium as gym
-import pickle
-import numpy as np
-import time
-import matplotlib.pyplot as plt
-from stable_baselines3 import A2C, PPO, DQN
-from matplotlib.patches import Patch
-from v0_warehouse_robot_env import WarehouseRobotEnv
+'''
+Script to evaluate multiple models in parallel and visualize their performance
+This script runs each model multiple times and measures:
+- Success rate
+- Average time to reach target
+- Performance comparison across models
+'''
+import time  # For measuring execution time
+import random  # For setting random seeds
+import gymnasium as gym  # For environment
+import pickle  # For loading saved models
+import matplotlib.pyplot as plt  # For visualization
+import numpy as np  # For numerical operations
+from stable_baselines3 import DQN  # For loading DQN model
+from v0_warehouse_robot_env import WarehouseRobotEnv  # Custom environment
+from matplotlib.patches import Patch  # For legend
 
+# Paths to saved models
 MODEL_PATHS = {
-    "Q-Learning": "D:/rl/models/q_learning.pkl",
-    "SARSA": "D:/rl/models/sarsa.pkl",
-    "A2C": "D:/rl/models/a2c_model.zip",
-    "PPO": "D:/rl/models/ppo_model.zip",
-    "DQN": "D:/rl/models/dqn_model.zip",
-    "Policy Gradient": "D:/rl/models/policy_gradient_model.zip",
-    "MDP": "D:/rl/models/mdp_policy.pkl"
+    "Q-Learning": "D:/rl/models/q_learning.pkl",  # Q-learning model
+    "SARSA": "D:/rl/models/sarsa.pkl",            # SARSA model
+    "DQN": "D:/rl/models/dqn_model.zip",          # DQN model
+    "MDP": "D:/rl/models/mdp_policy.pkl"          # MDP policy
 }
 
-MAX_STEPS = 30
-RUNS = 100
+# Evaluation parameters
+MAX_STEPS = 30  # Maximum steps per episode
+MAX_TIME = 10   # Maximum time in seconds before timeout
+NUM_TRIALS = 100  # Number of trials per model
 
-def run_model(name, path):
-    times = []
-    success_count = 0
-    for _ in range(RUNS):
-        env = gym.make("warehouse-robot-v0", render_mode=None)
-        obs, _ = env.reset()
-        done = False
-        steps = 0
-        start = time.time()
+def evaluate_model(model_name, model_path, seed):
+    """
+    Evaluate a single model's performance
+    Args:
+        model_name: Name of the model
+        model_path: Path to saved model
+        seed: Random seed for environment
+    Returns:
+        tuple: (success, time_taken)
+            success: Boolean indicating if target was reached
+            time_taken: Time taken to reach target or MAX_TIME if failed
+    """
+    # Create environment without rendering for speed
+    env = gym.make("warehouse-robot-v0", render_mode=None)
+    
+    # Reset environment with given seed
+    obs, _ = env.reset(seed=seed)
+    done = False
+    steps = 0
+    start = time.time()  # Start timer
 
-        try:
-            if name in ["Q-Learning", "SARSA", "MDP"]:
-                with open(path, "rb") as f:
-                    q = pickle.load(f)
+    # Load and run appropriate model
+    if model_name in ["Q-Learning", "SARSA", "MDP"]:
+        # Load tabular models (Q-learning, SARSA, MDP)
+        with open(model_path, "rb") as f:
+            q_table = pickle.load(f)
 
-                while not done and steps < MAX_STEPS:
-                    state = tuple(obs.astype(int))
-                    if name == "MDP":
-                        idx = (state[0] * 5 + state[1]) * 20 + (state[2] * 5 + state[3])
-                        action = int(q[idx])
-                    else:
-                        action = int(q[state].argmax())
-
-                    obs, _, done, _, _ = env.step(action)
-                    steps += 1
-
+        while not done and steps < MAX_STEPS:
+            # Convert state to tuple for indexing
+            state = tuple(obs.astype(int))
+            
+            if model_name == "MDP":
+                # Convert state to index for MDP policy
+                state_index = (state[0] * 5 + state[1]) * 20 + (state[2] * 5 + state[3])
+                action = int(q_table[state_index])
             else:
-                algo = {
-                    "A2C": A2C,
-                    "PPO": PPO,
-                    "DQN": DQN,
-                    "Policy Gradient": PPO,
-                }[name]
-                model = algo.load(path, env=env)
+                # Get best action from Q-table
+                action = int(q_table[state].argmax())
 
-                while not done and steps < MAX_STEPS:
-                    action, _ = model.predict(obs, deterministic=True)
-                    obs, _, done, _, _ = env.step(action)
-                    steps += 1
+            # Execute action
+            obs, _, done, _, _ = env.step(action)
+            steps += 1
 
-        except Exception as e:
-            print(f"❌ {name} failed on one run: {e}")
-            done = False
-
-        elapsed = time.time() - start
-        times.append(elapsed)
-        if done:
-            success_count += 1
-
-        env.close()
-
-    return times, success_count
-
-# === Run All Models ===
-all_times = {}
-success_counts = {}
-for name, path in MODEL_PATHS.items():
-    print(f"▶ Running {name}...")
-    times, success = run_model(name, path)
-    all_times[name] = times
-    success_counts[name] = success
-
-# === Plot 1: Avg Log Time + Std Dev ===
-avg_times = {k: np.mean(v) for k, v in all_times.items()}
-std_devs = {k: np.std(v) for k, v in all_times.items()}
-
-models = list(avg_times.keys())
-avg_vals = [avg_times[m] for m in models]
-std_vals = [std_devs[m] for m in models]
-
-colors = []
-fastest = min(avg_vals)
-worst_model = min(success_counts, key=lambda k: success_counts[k])
-for m in models:
-    if avg_times[m] == fastest:
-        colors.append("green")
-    elif m == worst_model:
-        colors.append("red")
     else:
-        colors.append("skyblue")
+        # Load and run DQN model
+        algo_class = {
+            "DQN": DQN
+        }[model_name]
 
-plt.figure(figsize=(12, 6))
-bars = plt.bar(models, avg_vals, yerr=std_vals, log=True, capsize=5, color=colors)
-for bar, val in zip(bars, avg_vals):
-    plt.text(bar.get_x() + bar.get_width()/2, val * 1.05, f"{val:.4f}s", ha='center', va='bottom')
+        model = algo_class.load(model_path, env=env)
 
-plt.title("⏱ Log-Scaled Avg Time per Model (100 runs, ±Std Dev)")
-plt.ylabel("Log Time (seconds)")
-plt.xlabel("Model")
-plt.grid(True, which="both", axis='y')
-plt.legend(handles=[
-    Patch(color="green", label="Fastest (Best Avg Time)"),
-    Patch(color="red", label="Most Failures"),
-    Patch(color="skyblue", label="Others")
-], title="Legend")
-plt.tight_layout()
-plt.savefig("avg_time_logscale.png")
+        while not done and steps < MAX_STEPS:
+            # Get action from DQN model
+            action, _ = model.predict(obs, deterministic=True)
+            # Execute action
+            obs, _, done, _, _ = env.step(action)
+            steps += 1
 
-# === Plot 2: Success Count ===
-plt.figure(figsize=(12, 5))
-bars = plt.bar(success_counts.keys(), success_counts.values(), color=[
-    "green" if v == max(success_counts.values()) else "red" if v == min(success_counts.values()) else "skyblue"
-    for v in success_counts.values()
-])
-for bar, val in zip(bars, success_counts.values()):
-    plt.text(bar.get_x() + bar.get_width()/2, val + 1, f"{val}/100", ha='center', va='bottom')
+    # Calculate total time
+    total_time = time.time() - start
+    success = done and steps < MAX_STEPS
 
-plt.title("✅ Convergence Accuracy per Model (100 runs)")
-plt.ylabel("Success Count")
-plt.xlabel("Model")
-plt.ylim(0, 105)
-plt.tight_layout()
-plt.savefig("model_success_count_readable.png")
+    # Print progress indicator
+    if trial % 10 == 0:  # Print every 10 trials
+        print(f"Trial {trial}/{NUM_TRIALS} - {model_name}: {'✅' if success else '❌'}")
+    
+    env.close()
+    return success, total_time
 
-print("✅ Benchmark done. Graphs saved as:")
-print("- avg_time_logscale.png")
-print("- model_success_count_readable.png")
+def main():
+    """
+    Main function to evaluate all models multiple times
+    """
+    # Set random seed for reproducibility
+    seed = random.randint(1, 1000000)  # Random seed for variety
+    random.seed(seed)
+    print(f"Using seed: {seed}")
+    
+    # Initialize results storage
+    results = {
+        name: {"successes": 0, "times": []} 
+        for name in MODEL_PATHS.keys()
+    }
+    
+    # Run multiple trials for each model
+    global trial  # Make trial count available for progress printing
+    for trial in range(NUM_TRIALS):
+        for model_name, model_path in MODEL_PATHS.items():
+            try:
+                # Evaluate model with unique seed for each trial
+                success, time_taken = evaluate_model(
+                    model_name, 
+                    model_path, 
+                    seed + trial
+                )
+                
+                # Update results
+                if success:
+                    results[model_name]["successes"] += 1
+                results[model_name]["times"].append(time_taken)
+                
+            except Exception as e:
+                print(f"❌ Error evaluating {model_name}: {e}")
+    
+    # Calculate statistics
+    stats = {}
+    for name, data in results.items():
+        if data["times"]:
+            stats[name] = {
+                "success_rate": data["successes"] / NUM_TRIALS,
+                "avg_time": np.mean(data["times"]),
+                "std_time": np.std(data["times"])
+            }
+    
+    # Print summary
+    print("\n📊 Results Summary:")
+    for name, stat in stats.items():
+        print(f"{name}:")
+        print(f"  Success Rate: {stat['success_rate']:.2%}")
+        print(f"  Average Time: {stat['avg_time']:.2f} ± {stat['std_time']:.2f} seconds")
+    
+    # === Plot 1: Log-Scaled Average Time ===
+    plt.figure(figsize=(12, 5))
+    avg_times = [stat["avg_time"] for stat in stats.values()]
+    std_times = [stat["std_time"] for stat in stats.values()]
+    
+    # Determine colors based on performance
+    colors = []
+    fastest_time = min(avg_times)
+    worst_model = min(stats.items(), key=lambda x: x[1]["success_rate"])[0]
+    for name, stat in stats.items():
+        if stat["avg_time"] == fastest_time:
+            colors.append("green")  # Fastest model
+        elif name == worst_model:
+            colors.append("red")    # Most failures
+        else:
+            colors.append("skyblue")  # Others
+    
+    bars = plt.bar(stats.keys(), avg_times, yerr=std_times, capsize=5, color=colors)
+    
+    # Add time values on top of bars
+    for bar, val in zip(bars, avg_times):
+        plt.text(bar.get_x() + bar.get_width()/2, val * 1.05,
+                f"{val:.4f}s", ha='center', va='bottom')
+    
+    plt.title("⏱ Log-Scaled Avg Time per Model (100 runs, ±Std Dev)")
+    plt.ylabel("Log Time (seconds)")
+    plt.yscale('log')  # Set log scale for y-axis
+    plt.grid(True, which="both", axis='y')
+    
+    # Add legend
+    plt.legend(handles=[
+        Patch(color="green", label="Fastest (Best Avg Time)"),
+        Patch(color="red", label="Most Failures"),
+        Patch(color="skyblue", label="Others")
+    ], title="Legend")
+    
+    plt.tight_layout()
+    plt.savefig("avg_time_logscale.png")
+    
+    # === Plot 2: Success Count ===
+    plt.figure(figsize=(12, 5))
+    success_counts = {name: data["successes"] for name, data in results.items()}
+    
+    # Color coding: green for best, red for worst
+    colors = ['green' if v == max(success_counts.values()) else 
+             'red' if v == min(success_counts.values()) else 'skyblue'
+             for v in success_counts.values()]
+    
+    bars = plt.bar(success_counts.keys(), success_counts.values(), color=colors)
+    
+    # Add success count values on top of bars
+    for bar, val in zip(bars, success_counts.values()):
+        plt.text(bar.get_x() + bar.get_width()/2, val + 1,
+                f"{val}/{NUM_TRIALS}", ha='center', va='bottom')
+    
+    plt.title("✅ Convergence Accuracy per Model (100 runs)")
+    plt.ylabel("Success Count")
+    plt.xlabel("Model")
+    plt.ylim(0, 105)  # Set y-axis limit to show values above bars
+    
+    plt.tight_layout()
+    plt.savefig("model_success_count_readable.png")
+    
+    plt.show()
+
+if __name__ == "__main__":
+    main()

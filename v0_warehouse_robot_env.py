@@ -1,120 +1,167 @@
 '''
-Custom Gym environment
+Custom Gym environment for the warehouse robot problem
+This module wraps the WarehouseRobot class to make it compatible with Gymnasium's interface
 https://gymnasium.farama.org/tutorials/gymnasium_basics/environment_creation/
+
+Key Components:
+- Environment: Gymnasium-compatible wrapper for WarehouseRobot
+- Action Space: Discrete actions (LEFT, DOWN, RIGHT, UP)
+- Observation Space: Box space representing robot and target positions
+- Reward: 1 for reaching target, 0 otherwise
+- Termination: When robot reaches target
 '''
 import gymnasium as gym
 from gymnasium import spaces
 from gymnasium.envs.registration import register
 from gymnasium.utils.env_checker import check_env
 
-import v0_warehouse_robot as wr
+import v0_warehouse_robot as wr  # Import the base warehouse robot implementation
 import numpy as np
 
-# Register this module as a gym environment. Once registered, the id is usable in gym.make().
+# Register this environment with Gymnasium
+# This allows using gym.make('warehouse-robot-v0') to create instances
 register(
-    id='warehouse-robot-v0',                                # call it whatever you want
-    entry_point='v0_warehouse_robot_env:WarehouseRobotEnv', # module_name:class_name
+    id='warehouse-robot-v0',                                # Unique identifier for the environment
+    entry_point='v0_warehouse_robot_env:WarehouseRobotEnv', # Module and class to use
 )
 
-# Implement our own gym env, must inherit from gym.Env
-# https://gymnasium.farama.org/api/env/
 class WarehouseRobotEnv(gym.Env):
-    # metadata is a required attribute
-    # render_modes in our environment is either None or 'human'.
-    # render_fps is not used in our env, but we are require to declare a non-zero value.
-    metadata = {"render_modes": ["human"], 'render_fps': 4}
+    """
+    Gymnasium environment wrapper for the warehouse robot problem
+    Implements the required Gymnasium interface methods
+    """
+    
+    # Required metadata for Gymnasium environments
+    metadata = {
+        "render_modes": ["human"],  # Supported rendering modes
+        'render_fps': 4             # Frames per second for rendering
+    }
 
     def __init__(self, grid_rows=4, grid_cols=5, render_mode=None):
-
-        self.grid_rows=grid_rows
-        self.grid_cols=grid_cols
+        """
+        Initialize the environment
+        Args:
+            grid_rows: Number of rows in the grid
+            grid_cols: Number of columns in the grid
+            render_mode: Rendering mode ('human' or None)
+        """
+        self.grid_rows = grid_rows
+        self.grid_cols = grid_cols
         self.render_mode = render_mode
 
-        # Initialize the WarehouseRobot problem
-        self.warehouse_robot = wr.WarehouseRobot(grid_rows=grid_rows, grid_cols=grid_cols, fps=self.metadata['render_fps'])
-
-        # Gym requires defining the action space. The action space is robot's set of possible actions.
-        # Training code can call action_space.sample() to randomly select an action. 
-        self.action_space = spaces.Discrete(len(wr.RobotAction))
-
-        # Gym requires defining the observation space. The observation space consists of the robot's and target's set of possible positions.
-        # The observation space is used to validate the observation returned by reset() and step().
-        # Use a 1D vector: [robot_row_pos, robot_col_pos, target_row_pos, target_col_pos]
-        self.observation_space = spaces.Box(
-            low=0,
-            high=np.array([self.grid_rows-1, self.grid_cols-1, self.grid_rows-1, self.grid_cols-1]),
-            shape=(4,),
-            dtype=np.int32
+        # Initialize the underlying warehouse robot problem
+        self.warehouse_robot = wr.WarehouseRobot(
+            grid_rows=grid_rows, 
+            grid_cols=grid_cols, 
+            fps=self.metadata['render_fps']
         )
 
-    # Gym required function (and parameters) to reset the environment
-    def reset(self, seed=None, options=None):
-        super().reset(seed=seed) # gym requires this call to control randomness and reproduce scenarios.
+        # Define action space: discrete actions (LEFT, DOWN, RIGHT, UP)
+        self.action_space = spaces.Discrete(len(wr.RobotAction))
 
-        # Reset the WarehouseRobot. Optionally, pass in seed control randomness and reproduce scenarios.
+        # Define observation space: [robot_row, robot_col, target_row, target_col]
+        self.observation_space = spaces.Box(
+            low=0,  # Minimum position (top-left corner)
+            high=np.array([self.grid_rows-1, self.grid_cols-1, self.grid_rows-1, self.grid_cols-1]),  # Maximum position
+            shape=(4,),  # 4-dimensional observation
+            dtype=np.int32  # Integer positions
+        )
+
+    def reset(self, seed=None, options=None):
+        """
+        Reset the environment to initial state
+        Args:
+            seed: Random seed for reproducible initial states
+            options: Additional options (not used)
+        Returns:
+            observation: Initial state
+            info: Additional information
+        """
+        super().reset(seed=seed)  # Required by Gymnasium for random seed control
+
+        # Reset the warehouse robot
         self.warehouse_robot.reset(seed=seed)
 
-        # Construct the observation state:
-        # [robot_row_pos, robot_col_pos, target_row_pos, target_col_pos]
-        obs = np.concatenate((self.warehouse_robot.robot_pos, self.warehouse_robot.target_pos))
+        # Construct observation: [robot_row, robot_col, target_row, target_col]
+        obs = np.concatenate((
+            self.warehouse_robot.robot_pos,    # Robot position
+            self.warehouse_robot.target_pos    # Target position
+        ))
         
-        # Additional info to return. For debugging or whatever.
+        # Additional information (empty in this case)
         info = {}
 
-        # Render environment
-        if(self.render_mode=='human'):
+        # Render if in human mode
+        if self.render_mode == 'human':
             self.render()
 
-        # Return observation and info
         return obs, info
 
-    # Gym required function (and parameters) to perform an action
     def step(self, action):
-        # Perform action
+        """
+        Execute one time step in the environment
+        Args:
+            action: Action to take (0=LEFT, 1=DOWN, 2=RIGHT, 3=UP)
+        Returns:
+            observation: New state after action
+            reward: Reward for the action
+            terminated: Whether episode is done
+            truncated: Whether episode was truncated (not used)
+            info: Additional information
+        """
+        # Execute action and check if target was reached
         target_reached = self.warehouse_robot.perform_action(wr.RobotAction(action))
 
         # Determine reward and termination
-        reward=0
-        terminated=False
+        reward = 0
+        terminated = False
         if target_reached:
-            reward=1
-            terminated=True
+            reward = 1
+            terminated = True
 
-        # Construct the observation state: 
-        # [robot_row_pos, robot_col_pos, target_row_pos, target_col_pos]
-        obs = np.concatenate((self.warehouse_robot.robot_pos, self.warehouse_robot.target_pos))
+        # Construct new observation
+        obs = np.concatenate((
+            self.warehouse_robot.robot_pos,    # Updated robot position
+            self.warehouse_robot.target_pos    # Target position (unchanged)
+        ))
 
-        # Additional info to return. For debugging or whatever.
+        # Additional information (empty in this case)
         info = {}
 
-        # Render environment
-        if(self.render_mode=='human'):
-            print(wr.RobotAction(action))
+        # Render if in human mode
+        if self.render_mode == 'human':
+            print(wr.RobotAction(action))  # Print action for debugging
             self.render()
 
-        # Return observation, reward, terminated, truncated (not used), info
         return obs, reward, terminated, False, info
 
-    # Gym required function to render environment
     def render(self):
+        """
+        Render the current state of the environment
+        """
         self.warehouse_robot.render()
 
-# For unit testing
-if __name__=="__main__":
+# Test the environment if run directly
+if __name__ == "__main__":
+    # Create environment with human rendering
     env = gym.make('warehouse-robot-v0', render_mode='human')
 
-    # Use this to check our custom environment
+    # Optional: Check if environment follows Gymnasium interface
     # print("Check environment begin")
     # check_env(env.unwrapped)
     # print("Check environment end")
 
-    # Reset environment
+    # Reset environment and get initial state
     obs = env.reset()[0]
 
-    # Take some random actions
-    while(True):
+    # Take random actions
+    while True:
+        # Sample random action
         rand_action = env.action_space.sample()
+        
+        # Execute action
         obs, reward, terminated, _, _ = env.step(rand_action)
 
-        if(terminated):
+        # Reset if episode is done
+        if terminated:
             obs = env.reset()[0]
